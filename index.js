@@ -18,7 +18,7 @@ async function Begin(){
   const pdfFileBinaries = new Array();
 
   console.log("Launching browser")
-  const browser = await puppeteer.launch({headless: true});
+  const browser = await puppeteer.launch({headless: false});
   const page = await browser.newPage();
 
   await page.setViewport({width: 793, height: 1123, deviceScaleFactor: 1});
@@ -35,24 +35,30 @@ async function Begin(){
       return;
   }
 
+  console.log("Adding events to images")
+  await AddLoadEventListenerToImages(page);
   console.log("Setting media type");
   await page.emulateMediaType('print');
 
-
   const eavisLength = await GetEavisLength(page, pageClassSelector);
-  for(let pageNumber = 1; pageNumber < eavisLength; pageNumber++)
+  for(let pageNumber = 1; pageNumber < eavisLength+1; pageNumber++)
   {
-    let pageFileName = String(pageIdSelector+pageNumber);
+    console.log(pageNumber);
+    let currentPageIdSelector = String(pageIdSelector+pageNumber);
 
-    await MoveToNextPage(page,nextPageButtonSelector); 
-    await EnsurePageScale(page,pageFileName);
-    //consider using the buffer object when generating pdf instead of saving the pdf to disk
-    let pageFileBinary = await GeneratePdf(page,pageFileName);
+    await EnsurePageScale(page,currentPageIdSelector);
+    await EnsureImagesFinishedLoading(page,currentPageIdSelector);
 
-    //add to array
-    pdfFiles[pageNumber-1] = (pageFileName); 
+    let pageFileBinary = await GeneratePdf(page,currentPageIdSelector);
+
+
+    pdfFiles[pageNumber] = (currentPageIdSelector); 
     pdfFileBinaries[pageNumber-1] = pageFileBinary;
 
+    // Only move to the next page if this is not the last page
+    if (pageNumber < eavisLength) {
+      await MoveToNextPage(page,nextPageButtonSelector); 
+    }
   }
 
   console.log(":::MERGING FOLLOWING PAGES:::")
@@ -68,7 +74,6 @@ async function GeneratePdf(page,pdfName){
     console.log("Generating PDF of page: "+pdfName);
    return await page.pdf(
     {
-      // path: "./LokalNytHorsensUge34/"+pdfName, 
       printBackground: true, 
       displayHeaderFooter: false,
       format: "A4"
@@ -102,6 +107,68 @@ async function EnsurePageScale(page,currentPage){
   {
     console.log("Something went wrong trying to change the style attribute of element: "+currentPage+" Possible cause: Missing style attribute on the element");
   }
+}
+
+async function EnsureImagesFinishedLoading(page, currentPage){
+
+  console.log(currentPage)
+   let result = await page.evaluate(async (currentPage) => {
+    return await (async () => {
+        let currPageElem = document.querySelector(currentPage);
+        if (currPageElem !== null) {
+            let allImagesOnCurrPage = currPageElem.getElementsByTagName("img");
+            if (allImagesOnCurrPage !== null && allImagesOnCurrPage !== undefined) {
+                console.log("NEW PAGE");
+                let allImagesCompleteAttrArr = new Array();
+                for(let x = 0; x < allImagesOnCurrPage.length; x++){
+                  let imgElem = allImagesOnCurrPage.item(x);
+                  console.log(imgElem)
+                  console.log(imgElem.getAttribute("data-isLoaded"))
+                  allImagesCompleteAttrArr.push(imgElem.getAttribute("data-isLoaded"))
+                }
+                console.log(allImagesCompleteAttrArr);
+                let haveImagesLoaded = false;
+
+
+                //async loop
+                while (!haveImagesLoaded) {
+
+                    haveImagesLoaded = await (() => {
+                        console.log("CALLBACK");
+                        return new Promise((resolve) => {
+                          console.log(allImagesCompleteAttrArr)
+                            if (allImagesCompleteAttrArr.includes("false")) {
+                              console.log("contained false!")
+                                resolve(false);
+                            } else {
+                              console.log("all images loaded!")
+                                resolve(true);
+                            }
+                        });
+                    })();
+
+
+                }
+                return haveImagesLoaded;
+            }
+        }
+    })();
+}, currentPage);
+
+  console.log(result);
+
+}
+
+async function AddLoadEventListenerToImages(page){
+  await page.evaluate(() => 
+  {
+    let images = document.getElementsByTagName("img");
+    for(let i = 0; i < images.length; i++){
+      images[i].setAttribute("data-isLoaded","false");
+      images[i].addEventListener("load", () => {images[i].setAttribute("data-isLoaded","true") 
+      console.log(images[i]+"HAS LOADED")});
+    }
+  })
 }
 
 async function GetEavisLength(page, pageClassSelector){
